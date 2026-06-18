@@ -1,0 +1,109 @@
+import type { Paper, SearchOptions } from "../types.js";
+import { fetchWithTimeout } from "../http.js";
+import { canonicalDoi, compact } from "../utils.js";
+
+interface SemanticScholarPaper {
+  paperId: string;
+  title?: string;
+  abstract?: string;
+  year?: number;
+  citationCount?: number;
+  influentialCitationCount?: number;
+  venue?: string;
+  publicationVenue?: { name?: string };
+  publicationDate?: string;
+  url?: string;
+  externalIds?: {
+    DOI?: string;
+    ArXiv?: string;
+  };
+  authors?: Array<{ name?: string }>;
+}
+
+interface SemanticScholarResponse {
+  data?: SemanticScholarPaper[];
+}
+
+const FIELDS = [
+  "paperId",
+  "title",
+  "abstract",
+  "year",
+  "citationCount",
+  "influentialCitationCount",
+  "venue",
+  "publicationVenue",
+  "publicationDate",
+  "url",
+  "externalIds",
+  "authors",
+].join(",");
+
+export async function searchSemanticScholar(options: SearchOptions): Promise<Paper[]> {
+  const params = new URLSearchParams({
+    query: options.topic,
+    limit: String(Math.min(Math.max(options.limit, 1), 100)),
+    fields: FIELDS,
+  });
+
+  if (options.yearFrom || options.yearTo) {
+    params.set("year", `${options.yearFrom ?? ""}-${options.yearTo ?? ""}`);
+  }
+
+  const headers: Record<string, string> = {};
+  if (options.semanticScholarApiKey) headers["x-api-key"] = options.semanticScholarApiKey;
+
+  const response = await fetchWithTimeout(`https://api.semanticscholar.org/graph/v1/paper/search?${params}`, {
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error(`Semantic Scholar request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as SemanticScholarResponse;
+  return (data.data ?? []).map(toPaper).filter((paper) => paper.title.length > 0);
+}
+
+export async function getSemanticScholarRecommendations(
+  paperId: string,
+  limit: number,
+  apiKey?: string,
+): Promise<Paper[]> {
+  const params = new URLSearchParams({
+    limit: String(Math.min(Math.max(limit, 1), 100)),
+    fields: FIELDS,
+  });
+  const headers: Record<string, string> = {};
+  if (apiKey) headers["x-api-key"] = apiKey;
+
+  const response = await fetchWithTimeout(
+    `https://api.semanticscholar.org/recommendations/v1/papers/forpaper/${encodeURIComponent(paperId)}?${params}`,
+    { headers },
+  );
+  if (!response.ok) {
+    throw new Error(`Semantic Scholar recommendations failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = (await response.json()) as { recommendedPapers?: SemanticScholarPaper[] };
+  return (data.recommendedPapers ?? []).map(toPaper).filter((paper) => paper.title.length > 0);
+}
+
+function toPaper(paper: SemanticScholarPaper): Paper {
+  return {
+    id: paper.paperId,
+    title: paper.title ?? "",
+    authors: compact((paper.authors ?? []).map((author) => author.name)),
+    year: paper.year,
+    publishedDate: paper.publicationDate,
+    venue: paper.publicationVenue?.name ?? paper.venue,
+    doi: canonicalDoi(paper.externalIds?.DOI),
+    arxivId: paper.externalIds?.ArXiv,
+    semanticScholarId: paper.paperId,
+    url: paper.url,
+    abstract: paper.abstract,
+    citationCount: paper.citationCount,
+    influentialCitationCount: paper.influentialCitationCount,
+    sources: ["semantic_scholar"],
+    sourceIds: { semantic_scholar: paper.paperId },
+  };
+}
