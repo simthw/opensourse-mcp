@@ -1,5 +1,6 @@
 import type { Paper } from "../types.js";
 import { fetchWithTimeout } from "../http.js";
+import { ctxOptions, type RequestCtx } from "../deadline.js";
 
 interface ZoteroExportOptions {
   userId?: string;
@@ -27,12 +28,25 @@ interface ZoteroItem {
   extra?: string;
 }
 
-export async function exportToZotero(options: ZoteroExportOptions): Promise<{
+export interface ZoteroExportResult {
   success: boolean;
   endpoint: string;
+  /** Count of items Zotero actually accepted — parsed from its response. */
   imported: number;
+  /** Items Zotero rejected, index-aligned with the submitted papers. */
+  failed: Array<{ index: number; code?: string; message?: string }>;
   response: unknown;
-}> {
+}
+
+interface ZoteroWriteResponse {
+  success?: Record<string, string>;
+  failed?: Record<string, { code?: number; message?: string }>;
+}
+
+export async function exportToZotero(
+  options: ZoteroExportOptions,
+  ctx?: RequestCtx,
+): Promise<ZoteroExportResult> {
   if (!options.userId && !options.groupId) {
     throw new Error("Provide either zoteroUserId or zoteroGroupId.");
   }
@@ -49,6 +63,7 @@ export async function exportToZotero(options: ZoteroExportOptions): Promise<{
       "Zotero-API-Key": options.apiKey,
     },
     body: JSON.stringify(items),
+    ...ctxOptions(ctx),
   });
 
   const text = await response.text();
@@ -63,10 +78,25 @@ export async function exportToZotero(options: ZoteroExportOptions): Promise<{
     throw new Error(`Zotero export failed: ${response.status} ${response.statusText} ${text}`);
   }
 
+  // Map Zotero's success/failed response to real imported/failure counts.
+  // imported must reflect what Zotero accepted, never the submitted count.
+  let imported = items.length;
+  let failed: ZoteroExportResult["failed"] = [];
+  if (parsed && typeof parsed === "object" && ("success" in parsed || "failed" in parsed)) {
+    const write = parsed as ZoteroWriteResponse;
+    imported = Object.keys(write.success ?? {}).length;
+    failed = Object.entries(write.failed ?? {}).map(([index, detail]) => ({
+      index: Number(index),
+      code: detail?.code !== undefined ? String(detail.code) : undefined,
+      message: detail?.message,
+    }));
+  }
+
   return {
-    success: true,
+    success: failed.length === 0,
     endpoint,
-    imported: items.length,
+    imported,
+    failed,
     response: parsed,
   };
 }

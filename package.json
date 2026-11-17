@@ -11,7 +11,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "node --import tsx --test \"test/*.test.ts\"",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify": "node --import tsx scripts/verify-mcp-e2e.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
